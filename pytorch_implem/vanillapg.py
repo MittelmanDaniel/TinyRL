@@ -5,13 +5,15 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.distributions.categorical import Categorical
 
+from gymnasium.wrappers import RecordVideo
+
 # Define the Policy Network
 class PolicyNetwork(nn.Module):
     def __init__(self, obs_size, hidden_size, action_size):
         super(PolicyNetwork, self).__init__()
         self.network = nn.Sequential(
             nn.Linear(obs_size, hidden_size),
-            nn.Tanh(),
+            nn.ReLU(),
             nn.Linear(hidden_size, action_size),
             nn.LogSoftmax(dim=1)
         )
@@ -23,8 +25,14 @@ class PolicyNetwork(nn.Module):
 NUM_SAMPLES = 256    # Number of episodes per epoch
 NUM_EPOCHS = 50      # Total training epochs
 
+EVAL_EVERY = 10
+
+
+ENV_NAME = 'LunarLander-v2'
 # Initialize the environment
-env = gym.make('CartPole-v1')
+env = gym.make(ENV_NAME, render_mode = "rgb_array")
+
+eval_env =  RecordVideo(env, video_folder="lander-agent", name_prefix="eval", episode_trigger=lambda x: True)
 
 # Retrieve dimensions
 obs_dim = env.observation_space.shape[0]
@@ -117,7 +125,7 @@ def train_one_epoch():
                 break
     
     # Convert lists to tensors
-    batch_obs_tensor = torch.as_tensor(batch_obs)
+    batch_obs_tensor = torch.as_tensor(np.array(batch_obs))
     batch_act_tensor = torch.as_tensor(batch_acts)
     batch_rew_tensor = torch.as_tensor(batch_rewards)
     
@@ -130,9 +138,31 @@ def train_one_epoch():
     return batch_loss.item(), batch_returns, batch_lens
 
 # Training loop
-for epoch in range(NUM_EPOCHS):
+for epoch in range(1,NUM_EPOCHS+1):
     batch_loss, batch_rets, batch_lens = train_one_epoch()
     
     print(f'epoch: {epoch:3d} \t loss: {batch_loss:.3f} \t '
           f'return: {np.mean(batch_rets):.3f} \t '
           f'ep_len: {np.mean(batch_lens):.3f}')
+
+
+    if(epoch%EVAL_EVERY == 0):
+        with model.eval():
+            eval_reward = 0
+            obs, info = eval_env.reset()
+            while True:
+                obs_tensor = torch.as_tensor(obs)
+                act = get_action(obs_tensor.unsqueeze(0))
+
+                obs, rew, terminated, truncated, info = eval_env.step(act)
+
+                eval_reward+=rew
+
+                done = terminated or truncated
+                
+                if done:
+                    break
+
+            print(f'eval: {epoch//EVAL_EVERY} \t eval_reward: {eval_reward:.3f}')
+
+
