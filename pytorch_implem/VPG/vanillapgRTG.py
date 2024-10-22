@@ -7,6 +7,8 @@ from torch.distributions.categorical import Categorical
 
 from gymnasium.wrappers import RecordVideo
 
+
+
 # Define the Policy Network
 class PolicyNetwork(nn.Module):
     def __init__(self, obs_size, hidden_size, action_size):
@@ -23,12 +25,13 @@ class PolicyNetwork(nn.Module):
 
 # Hyperparameters
 NUM_SAMPLES = 256    # Number of episodes per epoch
-NUM_EPOCHS = 50      # Total training epochs
+NUM_EPOCHS = 150      # Total training epochs
 
 EVAL_EVERY = 10
 
+DISCOUNT_FACTOR = 0.99
 
-ENV_NAME = 'LunarLander-v2'
+ENV_NAME = 'LunarLander-v3'
 # Initialize the environment
 env = gym.make(ENV_NAME, render_mode = "rgb_array")
 
@@ -76,6 +79,22 @@ def compute_loss(obs: torch.Tensor, act: torch.Tensor, rew: torch.Tensor):
 # Initialize the optimizer
 optimizer = optim.Adam(model.parameters(), lr = 1e-2)
 
+
+def reward_to_go(rewards: list[float]):
+
+    rewards_tensor = torch.tensor(rewards, dtype = torch.float32)
+    discount_factors = DISCOUNT_FACTOR ** torch.arange(len(rewards), dtype=torch.float32)
+
+    discounted_reward = discount_factors * rewards_tensor
+
+    discounted_reward = discounted_reward.flip(dims=(0,)).cumsum(dim=0).flip(dims=(0,))
+
+    discounted_reward = (discounted_reward/discount_factors)
+
+    return discounted_reward.tolist()
+
+    
+
 def train_one_epoch():
     """
     Collect trajectories and perform a single policy gradient update.
@@ -120,10 +139,13 @@ def train_one_epoch():
                 batch_lens.append(sample_len)
                 
                 # Assign return as reward for all timesteps in the episode
-                batch_rewards += [sample_ret] * sample_len
+
+                #NOTE THIS IS NOW REWARDS TO GO NOT JUST THE TOTAL TRAJECTORY REWARD
+                batch_rewards += reward_to_go(sample_rewards)
                 
                 break
     
+    model.train()
     # Convert lists to tensors
     batch_obs_tensor = torch.as_tensor(np.array(batch_obs))
     batch_act_tensor = torch.as_tensor(batch_acts)
@@ -147,22 +169,25 @@ for epoch in range(1,NUM_EPOCHS+1):
 
 
     if(epoch%EVAL_EVERY == 0):
-        with model.eval():
-            eval_reward = 0
-            obs, info = eval_env.reset()
-            while True:
-                obs_tensor = torch.as_tensor(obs)
-                act = get_action(obs_tensor.unsqueeze(0))
+        model.eval()
+        eval_reward = 0
+        obs, info = eval_env.reset()
+        while True:
+            obs_tensor = torch.as_tensor(obs)
+            act = get_action(obs_tensor.unsqueeze(0))
 
-                obs, rew, terminated, truncated, info = eval_env.step(act)
+            obs, rew, terminated, truncated, info = eval_env.step(act)
 
-                eval_reward+=rew
+            eval_reward+=rew
 
-                done = terminated or truncated
-                
-                if done:
-                    break
+            done = terminated or truncated
+            
+            if done:
+                break
 
-            print(f'eval: {epoch//EVAL_EVERY} \t eval_reward: {eval_reward:.3f}')
+        print(f'eval: {epoch//EVAL_EVERY} \t eval_reward: {eval_reward:.3f}')
 
 
+env.close()
+
+eval_env.close()
